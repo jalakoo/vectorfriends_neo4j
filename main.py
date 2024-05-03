@@ -118,7 +118,7 @@ def upload_to_neo4j(query, params):
             records, _, _ = driver.execute_query(query, params)
             return records
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Upload query error: {e}")
         return None
 
 def ingest_form(form: FormData):
@@ -193,8 +193,7 @@ def ingest_form(form: FormData):
     """
         params_2 = {
             'email': form.email,
-            'learnTech': interested_tech,
-            'openSource': opensource,
+            'learnTech': interested_tech
         }
         query_2_result = upload_to_neo4j(query_2, params_2)
         print(f'User-INTERESTED_IN-Tech relationship creation result: {query_2_result}')
@@ -202,13 +201,12 @@ def ingest_form(form: FormData):
     if opensource is not None:
         query_3 = """
         MATCH (u:User {email: $email})
-        MERGE (t:Tech {name: $name, description: $description})
+        MERGE (t:Tech {name: $name})
         MERGE (u)-[:LIKES]->(t)
     """
         params_3 = {
             'email': form.email,
             'name': opensource.name,
-            'description': opensource.description,
         }
         query_3_result = upload_to_neo4j(query_3, params_3)
         print(f'User-LIKES-Tech relationship creation result: {query_3_result}')

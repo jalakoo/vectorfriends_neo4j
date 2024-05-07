@@ -11,6 +11,7 @@ neo4j = "^5.20.0"
 functions-framework = "^3.5.0"
 basicauth = "^1.0.0"
 openai = "^1.25.1"
+ollama = "^0.1.9"
 
 
 [build-system]

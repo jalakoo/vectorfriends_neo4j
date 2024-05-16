@@ -1,5 +1,5 @@
 # Vectorfriends Neo4j Ingest
-Cloud function for importing form data from [Vectorfriends](https://github.com/itsajchan/vectorfriends)
+Cloud function for importing form data from [Vectorfriends](https://github.com/itsajchan/vectorfriends) running from the *neo4j* branch.
 
 
 ## Running Locally

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "vectorfriends-neo4j"
-version = "0.1.0"
+version = "0.1.1"
 description = ""
 authors = ["jalakoo <jalakoo@gmail.com>"]
 readme = "README.md"

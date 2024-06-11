@@ -5,6 +5,7 @@ import functions_framework
 import os
 from openai import OpenAI
 import json
+import logging
 
 # Note: Pydantic does not appear to work properly in Google Cloud Functions
 
@@ -41,7 +42,8 @@ def extract_name_description(sentence: str) -> str:
     prompt = f'Return a JSON dictionary with the keys "name" and "description" from a user statement about their favorite Open Source project. For example, return {{"name":"TensorFlow", "description":"An end-to-end open source platform for machine learning"}} from the sentence: "My favorite open source project is TensorFlow. It is an end-to-end open source platform for machine learning."'
 
     response = CLIENT.chat.completions.create(
-        model="gpt-3.5-turbo-1106",
+        # model="gpt-3.5-turbo-1106",
+        model="gpt-4o",
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": prompt},
@@ -73,10 +75,16 @@ def extract_name_description(sentence: str) -> str:
 
 def extract_topics(sentence: str) -> list[str]:
 
-    prompt = f'Return a JSON List of any application names, software technologies, or programming languages from a user statement. For example, return ["NextJS", "Django", "PostgresSQL"] from the sentence "NextJS + Django + PostgreSQL" or the sentence "I am most comfortable with NextJS, Django, and PostgresSQL". Always return only a single, combined list of answers. If none are found, simply return an empty list "[]"'
+    prompt = """Return a JSON List of any application names, software technologies, or programming languages from a user statement of the following structure: 
+
+    {
+    "application": [...list of applications]
+    }
+    
+    For example, return {"application": ["NextJS", "Django", "PostgresSQL"]} from the sentence "NextJS + Django + PostgreSQL" or the sentence "I am most comfortable with NextJS, Django, and PostgresSQL"."""
 
     response = CLIENT.chat.completions.create(
-        model="gpt-3.5-turbo-1106",
+        model="gpt-4o",
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": prompt},
@@ -132,8 +140,7 @@ def upload_to_neo4j(query, params):
         with GraphDatabase.driver(
             HOST, auth=basic_auth(USER, PASSWORD), database=DATABASE
         ) as driver:
-            records, _, _ = driver.execute_query(query, params)
-            return records
+            return driver.execute_query(query, params)
     except Exception as e:
         print(f"Upload query error: {e}")
         return None
@@ -176,40 +183,42 @@ def ingest_form(form: FormData):
 
     try:
         opensource = extract_topics(form.openSource)
+        additional_opensource = extract_name_description(form.openSource)
+        additional_opensource_list = [
+            d["name"]
+            for d in additional_opensource
+            if "name" in d and d["name"] not in additional_opensource
+        ]
+        opensource.extend(additional_opensource_list)
+
     except Exception as e:
         print(
             f"Error parsing openSource tech from form:{form}: {e}. Skipping openSource ingestion..."
         )
 
-    # Create User and Tenant records
+    all_tech.update(knows_tech)
+    all_tech.update(interested_tech)
+    all_tech.update(opensource)
+
+    # Create User and Tenant records, and remove any prior tech relationships
     query_0 = """
-    MERGE (u:User {email: $email, firstName: $firstName})
-    MERGE (t:Tenant {name: $tenant})
-    MERGE (u)-[:ATTENDED]->(t)
+    MERGE (u:User {email: $email})
+    ON CREATE SET u.firstName = $firstName
+    ON MATCH SET u.firstName = $firstName
+    MERGE (te:Tenant {name: $tenant})
+    MERGE (u)-[:ATTENDED]->(te)
+
+    WITH u
+    MATCH (u)-[r]->(t:Tech)
+    DELETE r
 """
     params_0 = {
         "email": form.email,
         "tenant": form.tenant,
         "firstName": form.firstName,
     }
-    query_0_result = upload_to_neo4j(query_0, params_0)
-    print(f"User and Tenant nodes creation result: {query_0_result}")
-
-    # Remove prior relationships for User nodes already stored
-    query_0a = """
-    MATCH (u:User {email: $email})-[r]->(t:Tech)
-    DELETE r
-"""
-    params_0a = {
-        "email": form.email,
-    }
-    query_0a_result = upload_to_neo4j(query_0a, params_0a)
-    print(f"Prior User-[r]->(t:Tech) relationships deleted result: {query_0a_result}")
-
-    # Create new Tech nodes if needed
-    all_tech.update(knows_tech)
-    all_tech.update(interested_tech)
-    all_tech.update(opensource)
+    _, query_0_result, _ = upload_to_neo4j(query_0, params_0)
+    print(f"User and Tenant nodes creation result: {query_0_result.counters}")
 
     query_1a = """
     UNWIND $techStack AS tech
@@ -218,8 +227,8 @@ def ingest_form(form: FormData):
     params_1a = {
         "techStack": list(all_tech),
     }
-    query_1a_result = upload_to_neo4j(query_1a, params_1a)
-    print(f"New tech creation result: {query_1a_result}")
+    _, query_1a_result, _ = upload_to_neo4j(query_1a, params_1a)
+    print(f"New tech creation result: {query_1a_result.counters}")
 
     if len(knows_tech) > 0:
         query_1 = """
@@ -233,8 +242,10 @@ def ingest_form(form: FormData):
             "email": form.email,
             "techStack": knows_tech,
         }
-        query_1_result = upload_to_neo4j(query_1, params_1)
-        print(f"User-KNOWS-Tech relationship creation result: {query_1_result}")
+        _, query_1_result, _ = upload_to_neo4j(query_1, params_1)
+        print(
+            f"User-KNOWS-Tech relationship creation result: {query_1_result.counters}"
+        )
 
     if len(interested_tech) > 0:
         query_2 = """
@@ -245,8 +256,10 @@ def ingest_form(form: FormData):
             MERGE (u)-[:INTERESTED_IN]->(t)
     """
         params_2 = {"email": form.email, "learnTech": interested_tech}
-        query_2_result = upload_to_neo4j(query_2, params_2)
-        print(f"User-INTERESTED_IN-Tech relationship creation result: {query_2_result}")
+        _, query_2_result, _ = upload_to_neo4j(query_2, params_2)
+        print(
+            f"User-INTERESTED_IN-Tech relationship creation result: {query_2_result.counters}"
+        )
 
     if opensource is not None:
         # TODO: Create nodes if needed
@@ -261,10 +274,60 @@ def ingest_form(form: FormData):
             "email": form.email,
             "opensource": opensource,
         }
-        query_3_result = upload_to_neo4j(query_3, params_3)
-        print(f"User-LIKES-Tech relationship creation result: {query_3_result}")
+        _, query_3_result, _ = upload_to_neo4j(query_3, params_3)
+        print(
+            f"User-LIKES-Tech relationship creation result: {query_3_result.counters}"
+        )
 
     return "OK", 200
+
+    # print(f"aggregated tech labels: {all_tech}")
+
+    # query = """
+    # MERGE (u:User {email: $email})
+    # ON CREATE SET u.firstName = $firstName
+    # ON MATCH SET u.firstName = $firstName
+    # MERGE (te:Tenant {name: $tenant})
+    # MERGE (u)-[:ATTENDED]->(te)
+
+    # WITH u
+    # MATCH (u)-[r]->(t:Tech)
+    # DELETE r
+
+    # WITH u
+    # UNWIND $allTech AS tech
+    #     MERGE (t:Tech {name: tech})
+
+    # WITH u
+    # UNWIND $techStack AS tech
+    #     MATCH (t:Tech {name: tech})
+    #     MERGE (u)-[:KNOWS]->(t)
+
+    # WITH u
+    # UNWIND $learnTech AS tech
+    #     MATCH (t:Tech {name: tech})
+    #     MERGE (u)-[:INTERESTED_IN]->(t)
+
+    # WITH u
+    # UNWIND $opensource AS tech
+    #     MATCH (t:Tech {name: tech})
+    #     MERGE (u)-[:LIKES]->(t)
+    # """
+
+    # params = {
+    #     "email": form.email,
+    #     "tenant": form.tenant,
+    #     "firstName": form.firstName,
+    #     "techStack": list(knows_tech),
+    #     "learnTech": list(interested_tech),
+    #     "opensource": list(opensource),
+    #     "allTech": list(all_tech),
+    # }
+
+    # records, summary, keys = upload_to_neo4j(query, params)
+    # print(f"Query summary: {summary.counters}")
+
+    # return "OK", 200
 
 
 @functions_framework.http
@@ -277,9 +340,15 @@ def import_form(request):
         auth_header = request.headers.get("Authorization")
         if auth_header is None:
             return "Missing authorization credentials", 401
-        request_username, request_password = decode(auth_header)
-        if request_username != basic_user or request_password != basic_password:
-            return "Unauthorized", 401
+        try:
+            request_username, request_password = decode(auth_header)
+            if request_username != basic_user or request_password != basic_password:
+                return "Unauthorized", 401
+        except Exception as e:
+            logging.error(
+                f"Problem parsing authorization header: {auth_header}: ERROR: {e}"
+            )
+            return f"Problem with Authorization credentials: {e}", 400
 
     payload = request.get_json(silent=True)
 

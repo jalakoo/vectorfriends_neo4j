@@ -7,10 +7,10 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.12"
-neo4j = "^5.20.0"
 functions-framework = "^3.5.0"
 basicauth = "^1.0.0"
 openai = "^1.25.1"
+neo4j-rust-ext = "^5.20.0.0"
 
 
 [build-system]
